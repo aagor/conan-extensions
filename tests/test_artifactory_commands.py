@@ -800,22 +800,38 @@ class TestArtPromoteCommand:
         save(os.path.join(package_metadata_folder, "base_package_new.txt"), "package metadata new")
 
         run('conan upload mypkg/1.0 -c -r extensions-stg --metadata="*"')
-        out = run(f"conan art:promote pkglist.json --from=extensions-stg --to=extensions-prod "
+        run(f"conan art:promote pkglist.json --from=extensions-stg --to=extensions-prod "
             f"--url={art_url} --user={art_user} --password={art_password}")
-        print(out)
         run('conan remove "*" -c')
         run('conan download "mypkg/1.0:*#*" -r=extensions-prod --metadata="*"')
         recipe_metadata_folder = run(f"conan cache path {rref} --folder=metadata").rstrip()
         package_metadata_folder = run(f"conan cache path {pref} --folder=metadata").rstrip()
 
-        # No overwrite happened
-        assert not os.path.exists(os.path.join(recipe_metadata_folder, "base_recipe_new.txt"))
-        assert not os.path.exists(os.path.join(package_metadata_folder, "base_package_new.txt"))
+        # The files are there
+        assert os.path.exists(os.path.join(recipe_metadata_folder, "base_recipe_new.txt"))
+        assert os.path.exists(os.path.join(package_metadata_folder, "base_package_new.txt"))
 
+        # No overwrite happened
         assert os.path.exists(os.path.join(recipe_metadata_folder, "base_recipe.txt"))
         assert os.path.exists(os.path.join(package_metadata_folder, "base_package.txt"))
         assert load(os.path.join(recipe_metadata_folder, "base_recipe.txt")) == "recipe metadata"
         assert load(os.path.join(package_metadata_folder, "base_package.txt")) == "package metadata"
+
+        # Now force, and overwrite
+        run(f"conan art:promote pkglist.json --from=extensions-stg --to=extensions-prod "
+            f"--url={art_url} --user={art_user} --password={art_password} --force")
+        run('conan remove "*" -c')
+        run('conan download "mypkg/1.0:*#*" -r=extensions-prod --metadata="*"')
+        recipe_metadata_folder = run(f"conan cache path {rref} --folder=metadata").rstrip()
+        package_metadata_folder = run(f"conan cache path {pref} --folder=metadata").rstrip()
+
+        assert os.path.exists(os.path.join(recipe_metadata_folder, "base_recipe_new.txt"))
+        assert os.path.exists(os.path.join(package_metadata_folder, "base_package_new.txt"))
+
+        assert os.path.exists(os.path.join(recipe_metadata_folder, "base_recipe.txt"))
+        assert os.path.exists(os.path.join(package_metadata_folder, "base_package.txt"))
+        assert load(os.path.join(recipe_metadata_folder, "base_recipe.txt")) == "recipe metadata overwritten"
+        assert load(os.path.join(package_metadata_folder, "base_package.txt")) == "package metadata overwritten"
 
 
 @pytest.mark.requires_credentials
