@@ -683,6 +683,36 @@ class TestArtPromoteCommand:
         return (run(f"conan cache path {rref} --folder=metadata").rstrip(),
                 run(f"conan cache path {pref} --folder=metadata").rstrip())
 
+    @staticmethod
+    def _assert_promoted(pattern="mypkg/1.0:*#*"):
+        """ Checks that what is in pkglist.json (listed in extensions-stg with the pattern) is now
+        in extensions-prod, with the same revisions and timestamps """
+        run(f'conan list "{pattern}" -r=extensions-prod -f=json --out-file=promoted.json')
+        promoted = json.loads(load("promoted.json"))["extensions-prod"]
+        assert promoted == json.loads(load("pkglist.json"))["extensions-stg"]
+
+    def _art_delete(self, repository, path):
+        """ Deletes a file from the Artifactory repository """
+        art_url, art_user, art_password = self._art_credentials()
+        requests.delete(f"{art_url}/{repository}/{path}", auth=(art_user, art_password)).raise_for_status()
+
+    def _create_and_upload(self):
+        """ Creates mypkg/1.0, uploads it to extensions-stg and lists it there in pkglist.json.
+        Returns its recipe and package references, with revisions """
+        conanfile = textwrap.dedent("""
+            from conan import ConanFile
+
+            class Pkg(ConanFile):
+                name = "mypkg"
+                version = "1.0"
+            """)
+        save("./conanfile.py", conanfile)
+        run("conan create .")
+        rref, pref = self._local_refs()
+        run("conan upload mypkg/1.0 -c -r extensions-stg")
+        run('conan list "mypkg/1.0:*#*" -r=extensions-stg -f=json --out-file=pkglist.json')
+        return rref, pref
+
     @pytest.mark.requires_credentials
     def test_art_promote_timestamps(self):
         conanfile = textwrap.dedent("""
@@ -773,8 +803,7 @@ class TestArtPromoteCommand:
         run(f"conan art:promote pkglist.json --from=extensions-stg --to=extensions-prod "
             f"--url={art_url} --user={art_user} --password={art_password}")
 
-        out = run("conan list mypkg/1.0:*#* -r=extensions-prod -f=json", stderr=None)
-        assert "mypkg/1.0" in out
+        self._assert_promoted()
 
     @pytest.mark.requires_credentials
     @pytest.mark.parametrize("compress", [None, "gz", "zst", "xz"])
@@ -887,9 +916,7 @@ class TestArtPromoteCommand:
 
         run('conan list "mypkg/1.0:*#*" -r=extensions-stg -f=json --out-file=pkglist.json')
         self._promote()
-
-        out = run(f"conan list mypkg/1.0:*#* -r=extensions-prod -f=compact", stderr=None)
-        assert "mypkg/1.0" in out
+        self._assert_promoted()
 
         out = run("conan install --requires=mypkg/1.0 -r=extensions-prod -b='&'")
         # Conandata is there
@@ -949,6 +976,41 @@ class TestArtPromoteCommand:
         run('conan remove "*" -c')
         run("conan install --requires=mypkg/1.0 -r=extensions-prod")
         run('conan cache check-integrity "mypkg/1.0:*#*"')
+
+    @pytest.mark.requires_credentials
+    def test_art_promote_revision_not_found_in_origin(self):
+        rref, pref = self._create_and_upload()
+
+        # The package is not in the origin anymore, only the recipe
+        run(f'conan remove "{rref}:*" -c -r=extensions-stg')
+        out = self._promote(error=True)
+        assert f"Package {pref} not found in the 'extensions-stg' repository" in out
+
+        # And neither is the recipe
+        run(f'conan remove "{rref}" -c -r=extensions-stg')
+        out = self._promote(error=True)
+        assert f"Recipe {rref} not found in the 'extensions-stg' repository" in out
+
+    @pytest.mark.requires_credentials
+    @pytest.mark.parametrize("kind", ["recipe", "package"])
+    def test_art_promote_incomplete_revision_in_origin(self, kind):
+        rref, pref = self._create_and_upload()
+        ref, folder, file = ((rref, self._recipe_folder(rref), "conanmanifest.txt") if kind == "recipe"
+                             else (pref, self._package_folder(pref), "conaninfo.txt"))
+        self._art_delete("extensions-stg", f"{folder}/{file}")
+
+        out = self._promote(error=True)
+        assert f"{kind.capitalize()} {ref} is missing {file} in the 'extensions-stg' repository" in out
+
+    @pytest.mark.requires_credentials
+    def test_art_promote_invalid_input(self):
+        save("pkglist.json", "{}")
+
+        out = run("conan art:promote pkglist.json --from=extensions-stg --to=extensions-prod", error=True)
+        assert "Specify --server or --url" in out
+
+        out = self._promote(error=True)
+        assert "Can't promote empty package list pkglist.json" in out
 
 
 @pytest.mark.requires_credentials

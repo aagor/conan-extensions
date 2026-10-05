@@ -122,26 +122,31 @@ Now, both release and debug binaries from that package are available in the dest
 
 ```
 $ conan art:promote -h
-usage: conan promote [-h] [-v [V]] [-cc CORE_CONF] --from ORIGIN --to
-                     DESTINATION [--remote REMOTE] [--server SERVER]
-                     [--url URL] [--user USER] [--password PASSWORD]
-                     [--token TOKEN] [--force]
-                     list
+usage: conan art:promote [-h] [--out-file OUT_FILE]
+                         [-v [{quiet,error,warning,notice,status,verbose,debug,v,trace,vv}]]
+                         [-cc CORE_CONF] --from ORIGIN --to DESTINATION
+                         [--remote REMOTE] [--server SERVER] [--url URL]
+                         [--user USER] [--password PASSWORD] [--token TOKEN]
+                         [--force]
+                         list
 
-Promote Conan recipes and packages in a pkglist file from an origin Artifactory repository to a destination repository,
-without downloading the packages locally
+Promote Conan recipes and packages in a pkglist file from an origin Artifactory repository to a destination repository, without downloading the packages locally
 
 positional arguments:
   list                  Package list file to promote
 
 options:
   -h, --help            show this help message and exit
-  -v [V]                Level of detail of the output. Valid options from less
+  --out-file OUT_FILE   Write the output of the command to the specified file
+                        instead of stdout.
+  -v [{quiet,error,warning,notice,status,verbose,debug,v,trace,vv}]
+                        Level of detail of the output. Valid options from less
                         verbose to more verbose: -vquiet, -verror, -vwarning,
                         -vnotice, -vstatus, -v or -vverbose, -vv or -vdebug,
                         -vvv or -vtrace
-  -cc CORE_CONF, --core-conf CORE_CONF
-                        Global configuration for Conan
+  -cc, --core-conf CORE_CONF
+                        Define core configuration, overwriting global.conf
+                        values. E.g.: -cc core:non_interactive=True
   --from ORIGIN         Artifactory origin repository name
   --to DESTINATION      Artifactory destination repository name
   --remote REMOTE       Promote packages from this remote (to disambiguate in
