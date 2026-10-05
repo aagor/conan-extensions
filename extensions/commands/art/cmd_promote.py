@@ -50,7 +50,6 @@ def _promote_path(url, user, password, origin, destination, path, force=False):
     """
     ConanOutput().subtitle(f"Promoting {path}")
     path = urllib.parse.quote_plus(path, safe='/')
-    exists = False
     # The copy api creates a subfolder if the destination already exists, need to check beforehand to avoid this
     try:
         # This first request will raise a 404 if no file is found
@@ -90,11 +89,22 @@ def _promote_recipe_rrev(url, user, password, origin, destination, rrev, force=F
         raise ConanException("Recipe folder is missing conanfile.py/conanmanifest.txt files, cannot promote. "
                              "Make sure the recipe exists and is complete in the origin repository.")
 
-    # Promote package metadata
+    # Promote recipe metadata
     for metadata_path in (file for file in folder_contents if file.startswith("/metadata/")):
         _promote_path(url, user, password, origin, destination,
                       path=f"{revision_path}{metadata_path}",
                       force=force)
+
+    # Promote compressed files
+    compressed_files = ["/conan_export", "/conan_sources"]
+    for compressed_file in compressed_files:
+        for ext in ["tgz", "tzst", "txz"]:
+            conan_compressed_file = f"{compressed_file}.{ext}"
+            if conan_compressed_file in folder_contents:
+                _promote_path(url, user, password, origin, destination,
+                              path=f"{revision_path}{conan_compressed_file}",
+                              force=force)
+                break
 
     # Finally, necessary files
     for info_file in info_files:

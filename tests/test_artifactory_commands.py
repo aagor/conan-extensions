@@ -825,13 +825,51 @@ class TestArtPromoteCommand:
         recipe_metadata_folder = run(f"conan cache path {rref} --folder=metadata").rstrip()
         package_metadata_folder = run(f"conan cache path {pref} --folder=metadata").rstrip()
 
-        assert os.path.exists(os.path.join(recipe_metadata_folder, "base_recipe_new.txt"))
-        assert os.path.exists(os.path.join(package_metadata_folder, "base_package_new.txt"))
+        assert os.path.exists(os.path.join(recipe_metadata_folder, "base_recipe new.txt"))
+        assert os.path.exists(os.path.join(recipe_metadata_folder, "sub", "sub recipe.txt"))
+        assert os.path.exists(os.path.join(package_metadata_folder, "base_package new.txt"))
+        assert os.path.exists(os.path.join(package_metadata_folder, "sub", "sub package.txt"))
 
         assert os.path.exists(os.path.join(recipe_metadata_folder, "base_recipe.txt"))
         assert os.path.exists(os.path.join(package_metadata_folder, "base_package.txt"))
         assert load(os.path.join(recipe_metadata_folder, "base_recipe.txt")) == "recipe metadata overwritten"
         assert load(os.path.join(package_metadata_folder, "base_package.txt")) == "package metadata overwritten"
+
+    @pytest.mark.requires_credentials
+    def test_art_promote_tarballs(self):
+        conanfile = textwrap.dedent("""
+            from conan import ConanFile
+            from conan.tools.files import save
+            import os
+
+            class Pkg(ConanFile):
+                name = "mypkg"
+                version = "1.0"
+                exports_sources = "CMakeLists.txt"
+                def source(self):
+                    self.output.info("Conandata version: {}".format(self.conan_data["version"]))
+            """)
+        save("./conanfile.py", conanfile)
+        save("./conandata.yml", "version: 1\n")
+        save("./CMakeLists.txt", "cmake_minimum_required(VERSION 3.15)")
+
+        run("conan create .")
+        run("conan upload mypkg/1.0 -c -r extensions-stg")
+        run("conan remove '*' -c")
+
+        run('conan list "mypkg/1.0:*#*" -r=extensions-stg -f=json --out-file=pkglist.json')
+        art_url = os.getenv("ART_URL")
+        art_user = os.getenv("CONAN_LOGIN_USERNAME_EXTENSIONS_PROD")
+        art_password = os.getenv("CONAN_PASSWORD_EXTENSIONS_PROD")
+        run(f"conan art:promote pkglist.json --from=extensions-stg --to=extensions-prod "
+            f"--url={art_url} --user={art_user} --password={art_password}")
+
+        out = run(f"conan list mypkg/1.0:*#* -r=extensions-prod -f=compact", stderr=None)
+        assert "mypkg/1.0" in out
+
+        out = run("conan install --requires=mypkg/1.0 -r=extensions-prod -b='&'")
+        # Conandata is there
+        assert "Conandata version: 1" in out
 
 
 @pytest.mark.requires_credentials
