@@ -54,7 +54,7 @@ def _promote_path(url, user, password, origin, destination, path, force=False):
     try:
         # This first request will raise a 404 if no file is found
         _request(url, user, password, "get", f"api/storage/{destination}/{path}")
-        ConanOutput().warning("Destination already exists" + (" (force promote)" if force else ""))
+        ConanOutput().info("Destination already exists" + (" (force promote)" if force else ""))
         exists = True
     except NotFoundException:
         # It raised a 404, so it's not in destination. We can promote it
@@ -178,6 +178,7 @@ def promote(conan_api: ConanAPI, parser, *args):
 
     args = parser.parse_args(*args)
 
+    assert_server_or_url_user_password(args)
     url, user, password = get_url_user_password(args)
     if not url.endswith("/"):
         url += "/"
@@ -189,6 +190,8 @@ def promote(conan_api: ConanAPI, parser, *args):
     if len(remotes) > 1 and args.remote is None:
         raise ConanException(f"Expected every package to come from the same origin repository in {args.origin}, "
                              f"use --remote to disambiguate")
+    if len(remotes) == 0:
+        raise ConanException(f"Can't promote empty package list {args.list}")
 
     if args.remote is not None:
         origin_remote = args.remote
@@ -201,7 +204,6 @@ def promote(conan_api: ConanAPI, parser, *args):
         raise ConanException(f"Package list must come from the remote associated with {args.origin}, "
                              f"but found from local cache")
 
-    assert_server_or_url_user_password(args)
     # Only artifactory pro edition supports this feature
     response = _request(url, user, password, "get", "api/system/version")
     if response["license"] == "Artifactory Community Edition for C/C++":
