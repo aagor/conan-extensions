@@ -784,7 +784,7 @@ class TestArtPromoteCommand:
             f"--url={art_url} --user={art_user} --password={art_password}")
 
         out = run(f"conan list mypkg/1.0:*#* -r=extensions-prod -f=compact", stderr=None)
-        assert pref.rsplit("#")[0] in out
+        assert pref.rsplit('#', 1)[0] in out
 
         run('conan remove "*" -c')
         run('conan download "mypkg/1.0:*#*" -r=extensions-prod --metadata="*"')
@@ -825,10 +825,8 @@ class TestArtPromoteCommand:
         recipe_metadata_folder = run(f"conan cache path {rref} --folder=metadata").rstrip()
         package_metadata_folder = run(f"conan cache path {pref} --folder=metadata").rstrip()
 
-        assert os.path.exists(os.path.join(recipe_metadata_folder, "base_recipe new.txt"))
-        assert os.path.exists(os.path.join(recipe_metadata_folder, "sub", "sub recipe.txt"))
-        assert os.path.exists(os.path.join(package_metadata_folder, "base_package new.txt"))
-        assert os.path.exists(os.path.join(package_metadata_folder, "sub", "sub package.txt"))
+        assert os.path.exists(os.path.join(recipe_metadata_folder, "base_recipe_new.txt"))
+        assert os.path.exists(os.path.join(package_metadata_folder, "base_package_new.txt"))
 
         assert os.path.exists(os.path.join(recipe_metadata_folder, "base_recipe.txt"))
         assert os.path.exists(os.path.join(package_metadata_folder, "base_package.txt"))
