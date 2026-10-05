@@ -125,7 +125,7 @@ $ conan art:promote -h
 usage: conan promote [-h] [-v [V]] [-cc CORE_CONF] --from ORIGIN --to
                      DESTINATION [--remote REMOTE] [--server SERVER]
                      [--url URL] [--user USER] [--password PASSWORD]
-                     [--token TOKEN]
+                     [--token TOKEN] [--force]
                      list
 
 Promote Conan recipes and packages in a pkglist file from an origin Artifactory repository to a destination repository,
@@ -153,7 +153,22 @@ options:
   --user USER           User name for the repository
   --password PASSWORD   Password for the user name (instead of token)
   --token TOKEN         Token for the repository (instead of password)
+  --force               Overwrite the files that already exist in the
+                        destination repository, instead of skipping them.
+                        Needs overwrite permissions in the destination
+                        repository
 ```
 
 Uses a pkglist file to promote a package from one Artifactory repository to another, without downloading the packages locally.
 Needs a Pro license to work.
+
+The files of every recipe and package revision in the list are promoted one by one:
+
+- For the recipes: `conanfile.py`, `conanmanifest.txt` and, if the recipe has them, the `conan_export` and `conan_sources` compressed files (they contain the `conandata.yml`, the exported files and the exported sources).
+- For the packages: the binary (`conan_package`), `conaninfo.txt` and `conanmanifest.txt`.
+- The metadata files of the recipes and the packages, including the ones in subfolders.
+
+The files that make a revision valid (`conanfile.py` or `conaninfo.txt`, and `conanmanifest.txt`) are promoted last, so an interrupted promotion doesn't leave a revision that looks complete, and running it again continues where it stopped.
+
+By default, the files that already exist in the destination repository are skipped, so promoting a revision again only adds what is missing, like the metadata files that were added after the first promotion.
+The metadata can change without a new revision though, and those changes are not promoted that way. To overwrite the files that already exist in the destination, use `--force`. Note that overwriting needs permissions in the destination repository that are not needed otherwise.

@@ -1,6 +1,5 @@
 import os
 import json
-import re
 import sys
 import tempfile
 import textwrap
@@ -10,6 +9,7 @@ from conan.tools.scm import Version
 from conan import conan_version
 
 import pytest
+import requests
 
 # to test locally with an Artifactory instance that already has
 # extensions-stg and extensions-prod repos, define these environment variables
