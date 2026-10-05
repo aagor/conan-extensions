@@ -627,6 +627,62 @@ def test_add_server_token():
 
 
 class TestArtPromoteCommand:
+    @staticmethod
+    def _art_credentials():
+        return (os.getenv("ART_URL"), os.getenv("CONAN_LOGIN_USERNAME_EXTENSIONS_PROD"),
+                os.getenv("CONAN_PASSWORD_EXTENSIONS_PROD"))
+
+    def _promote(self, *args, **kwargs):
+        """ Promotes pkglist.json from extensions-stg to extensions-prod, returns the output """
+        art_url, art_user, art_password = self._art_credentials()
+        return run(f"conan art:promote pkglist.json --from=extensions-stg --to=extensions-prod "
+                   f"--url={art_url} --user={art_user} --password={art_password} {' '.join(args)}", **kwargs)
+
+    def _art_files(self, repository, folder):
+        """ Files in the folder of the Artifactory repository (recursively), relative to the folder """
+        art_url, art_user, art_password = self._art_credentials()
+        response = requests.get(f"{art_url}/api/storage/{repository}/{folder}?list&deep=1",
+                                auth=(art_user, art_password))
+        response.raise_for_status()
+        return {item["uri"] for item in response.json()["files"]}
+
+    @staticmethod
+    def _local_refs(name_version="mypkg/1.0"):
+        """ Recipe and package references, with revisions, of the only package in the local cache """
+        run(f'conan list "{name_version}:*#*" -f=json --out-file=local.json')
+        revisions = json.loads(load("local.json"))["Local Cache"][name_version]["revisions"]
+        rrev, recipe = next(iter(revisions.items()))
+        package_id, package = next(iter(recipe["packages"].items()))
+        prev = next(iter(package["revisions"]))
+        return f"{name_version}#{rrev}", f"{name_version}#{rrev}:{package_id}#{prev}"
+
+    @staticmethod
+    def _recipe_folder(rref):
+        name_version, rrev = rref.split("#")
+        return f"_/{name_version}/_/{rrev}/export"
+
+    @staticmethod
+    def _package_folder(pref):
+        rref, package = pref.split(":")
+        package_id, prev = package.split("#")
+        name_version, rrev = rref.split("#")
+        return f"_/{name_version}/_/{rrev}/package/{package_id}/{prev}"
+
+    @staticmethod
+    def _save_metadata(ref, files):
+        """ Creates metadata files (a dict of name: content) in the local cache for the recipe or package ref """
+        folder = run(f"conan cache path {ref} --folder=metadata").rstrip()
+        for name, content in files.items():
+            save(os.path.join(folder, name), content)
+
+    @staticmethod
+    def _download_metadata(rref, pref):
+        """ Downloads from extensions-prod to an empty cache, returns the recipe and package metadata folders """
+        run('conan remove "*" -c')
+        run('conan download "mypkg/1.0:*#*" -r=extensions-prod --metadata="*"')
+        return (run(f"conan cache path {rref} --folder=metadata").rstrip(),
+                run(f"conan cache path {pref} --folder=metadata").rstrip())
+
     @pytest.mark.requires_credentials
     def test_art_promote_timestamps(self):
         conanfile = textwrap.dedent("""
@@ -766,72 +822,46 @@ class TestArtPromoteCommand:
             """)
         save("./conanfile.py", conanfile)
 
-        out = run("conan create .")
-        match = re.search("Full package reference: (mypkg/1.0#.*):(.*#.*)", out)
-        rref = match.group(1)
-        pref = f"{rref}:{match.group(2)}"
-        recipe_metadata_folder = run(f"conan cache path {rref} --folder=metadata").rstrip()
-        package_metadata_folder = run(f"conan cache path {pref} --folder=metadata").rstrip()
-        save(os.path.join(recipe_metadata_folder, "base_recipe.txt"), "recipe metadata")
-        save(os.path.join(package_metadata_folder, "base_package.txt"), "package metadata")
+        run("conan create .")
+        rref, pref = self._local_refs()
+        self._save_metadata(rref, {"base_recipe.txt": "recipe metadata"})
+        self._save_metadata(pref, {"base_package.txt": "package metadata"})
         run("conan upload mypkg/1.0 -c -r extensions-stg")
 
-        run(f'conan list "mypkg/1.0:*#*" -r=extensions-stg -f=json --out-file=pkglist.json')
-        art_url = os.getenv("ART_URL")
-        art_user = os.getenv("CONAN_LOGIN_USERNAME_EXTENSIONS_PROD")
-        art_password = os.getenv("CONAN_PASSWORD_EXTENSIONS_PROD")
-        run(f"conan art:promote pkglist.json --from=extensions-stg --to=extensions-prod "
-            f"--url={art_url} --user={art_user} --password={art_password}")
+        run('conan list "mypkg/1.0:*#*" -r=extensions-stg -f=json --out-file=pkglist.json')
+        self._promote()
 
-        out = run(f"conan list mypkg/1.0:*#* -r=extensions-prod -f=compact", stderr=None)
+        out = run('conan list "mypkg/1.0:*#*" -r=extensions-prod -f=compact', stderr=None)
         assert pref.rsplit('#', 1)[0] in out
 
-        run('conan remove "*" -c')
-        run('conan download "mypkg/1.0:*#*" -r=extensions-prod --metadata="*"')
-        recipe_metadata_folder = run(f"conan cache path {rref} --folder=metadata").rstrip()
-        package_metadata_folder = run(f"conan cache path {pref} --folder=metadata").rstrip()
+        recipe_metadata, package_metadata = self._download_metadata(rref, pref)
+        assert load(os.path.join(recipe_metadata, "base_recipe.txt")) == "recipe metadata"
+        assert load(os.path.join(package_metadata, "base_package.txt")) == "package metadata"
 
-        assert os.path.exists(os.path.join(recipe_metadata_folder, "base_recipe.txt"))
-        assert os.path.exists(os.path.join(package_metadata_folder, "base_package.txt"))
-
-        save(os.path.join(recipe_metadata_folder, "base_recipe.txt"), "recipe metadata overwritten")
-        save(os.path.join(recipe_metadata_folder, "base_recipe_new.txt"), "recipe metadata new")
-        save(os.path.join(package_metadata_folder, "base_package.txt"), "package metadata overwritten")
-        save(os.path.join(package_metadata_folder, "base_package_new.txt"), "package metadata new")
-
+        # The metadata can change without a new revision, and new files can be added
+        self._save_metadata(rref, {"base_recipe.txt": "recipe metadata overwritten",
+                              "base_recipe_new.txt": "recipe metadata new"})
+        self._save_metadata(pref, {"base_package.txt": "package metadata overwritten",
+                              "base_package_new.txt": "package metadata new"})
         run('conan upload mypkg/1.0 -c -r extensions-stg --metadata="*"')
-        run(f"conan art:promote pkglist.json --from=extensions-stg --to=extensions-prod "
-            f"--url={art_url} --user={art_user} --password={art_password}")
-        run('conan remove "*" -c')
-        run('conan download "mypkg/1.0:*#*" -r=extensions-prod --metadata="*"')
-        recipe_metadata_folder = run(f"conan cache path {rref} --folder=metadata").rstrip()
-        package_metadata_folder = run(f"conan cache path {pref} --folder=metadata").rstrip()
 
-        # The files are there
-        assert os.path.exists(os.path.join(recipe_metadata_folder, "base_recipe_new.txt"))
-        assert os.path.exists(os.path.join(package_metadata_folder, "base_package_new.txt"))
-
-        # No overwrite happened
-        assert os.path.exists(os.path.join(recipe_metadata_folder, "base_recipe.txt"))
-        assert os.path.exists(os.path.join(package_metadata_folder, "base_package.txt"))
-        assert load(os.path.join(recipe_metadata_folder, "base_recipe.txt")) == "recipe metadata"
-        assert load(os.path.join(package_metadata_folder, "base_package.txt")) == "package metadata"
+        # The new files are promoted, but the ones that already existed are not overwritten
+        out = self._promote()
+        assert "Destination already exists, skipping" in out
+        recipe_metadata, package_metadata = self._download_metadata(rref, pref)
+        assert load(os.path.join(recipe_metadata, "base_recipe_new.txt")) == "recipe metadata new"
+        assert load(os.path.join(package_metadata, "base_package_new.txt")) == "package metadata new"
+        assert load(os.path.join(recipe_metadata, "base_recipe.txt")) == "recipe metadata"
+        assert load(os.path.join(package_metadata, "base_package.txt")) == "package metadata"
 
         # Now force, and overwrite
-        run(f"conan art:promote pkglist.json --from=extensions-stg --to=extensions-prod "
-            f"--url={art_url} --user={art_user} --password={art_password} --force")
-        run('conan remove "*" -c')
-        run('conan download "mypkg/1.0:*#*" -r=extensions-prod --metadata="*"')
-        recipe_metadata_folder = run(f"conan cache path {rref} --folder=metadata").rstrip()
-        package_metadata_folder = run(f"conan cache path {pref} --folder=metadata").rstrip()
-
-        assert os.path.exists(os.path.join(recipe_metadata_folder, "base_recipe_new.txt"))
-        assert os.path.exists(os.path.join(package_metadata_folder, "base_package_new.txt"))
-
-        assert os.path.exists(os.path.join(recipe_metadata_folder, "base_recipe.txt"))
-        assert os.path.exists(os.path.join(package_metadata_folder, "base_package.txt"))
-        assert load(os.path.join(recipe_metadata_folder, "base_recipe.txt")) == "recipe metadata overwritten"
-        assert load(os.path.join(package_metadata_folder, "base_package.txt")) == "package metadata overwritten"
+        out = self._promote("--force")
+        assert "Destination already exists, overwriting (--force)" in out
+        recipe_metadata, package_metadata = self._download_metadata(rref, pref)
+        assert load(os.path.join(recipe_metadata, "base_recipe_new.txt")) == "recipe metadata new"
+        assert load(os.path.join(package_metadata, "base_package_new.txt")) == "package metadata new"
+        assert load(os.path.join(recipe_metadata, "base_recipe.txt")) == "recipe metadata overwritten"
+        assert load(os.path.join(package_metadata, "base_package.txt")) == "package metadata overwritten"
 
     @pytest.mark.requires_credentials
     def test_art_promote_tarballs(self):
@@ -856,11 +886,7 @@ class TestArtPromoteCommand:
         run("conan remove '*' -c")
 
         run('conan list "mypkg/1.0:*#*" -r=extensions-stg -f=json --out-file=pkglist.json')
-        art_url = os.getenv("ART_URL")
-        art_user = os.getenv("CONAN_LOGIN_USERNAME_EXTENSIONS_PROD")
-        art_password = os.getenv("CONAN_PASSWORD_EXTENSIONS_PROD")
-        run(f"conan art:promote pkglist.json --from=extensions-stg --to=extensions-prod "
-            f"--url={art_url} --user={art_user} --password={art_password}")
+        self._promote()
 
         out = run(f"conan list mypkg/1.0:*#* -r=extensions-prod -f=compact", stderr=None)
         assert "mypkg/1.0" in out
@@ -868,6 +894,61 @@ class TestArtPromoteCommand:
         out = run("conan install --requires=mypkg/1.0 -r=extensions-prod -b='&'")
         # Conandata is there
         assert "Conandata version: 1" in out
+
+    @pytest.mark.requires_credentials
+    @pytest.mark.parametrize("compress", [None, "gz", "xz", "zst"])
+    def test_art_promote_complete_revision(self, compress):
+        """ Every file of the recipe and package revisions is promoted, not just a known set of them:
+        the tarballs with the exports and the sources, the binary and all the metadata, even if nested """
+        if compress == "zst" and sys.version_info.minor < 14:
+            pytest.skip("Skipping zst compression tests")
+
+        conf = f"-cc core.upload:compression_format={compress}" if compress else ""
+        extension = {None: "tgz", "gz": "tgz", "xz": "txz", "zst": "tzst"}[compress]
+        conanfile = textwrap.dedent("""
+            from conan import ConanFile
+
+            class Pkg(ConanFile):
+                name = "mypkg"
+                version = "1.0"
+                exports = "extra/*"
+                exports_sources = "src/*"
+            """)
+        save("./conanfile.py", conanfile)
+        save("./conandata.yml", "version: 1\n")
+        save("./extra/helper.txt", "exported")
+        save("./src/main.cpp", "int main() {}")
+
+        run(f"conan create . {conf}")
+        rref, pref = self._local_refs()
+        for ref in (rref, pref):
+            self._save_metadata(ref, {"base.txt": "metadata", "logs/build.log": "nested metadata"})
+        run(f"conan upload mypkg/1.0 -c -r extensions-stg {conf}")
+        run('conan list "mypkg/1.0:*#*" -r=extensions-stg -f=json --out-file=pkglist.json')
+
+        # Make sure the origin does have all of these, or the comparisons below could not fail
+        recipe_files = self._art_files("extensions-stg", self._recipe_folder(rref))
+        assert {f"/conan_export.{extension}", f"/conan_sources.{extension}",
+                "/metadata/base.txt", "/metadata/logs/build.log"} <= recipe_files
+        package_files = self._art_files("extensions-stg", self._package_folder(pref))
+        assert {f"/conan_package.{extension}", "/metadata/base.txt", "/metadata/logs/build.log"} <= package_files
+
+        def assert_same_files_in_destination():
+            for folder in (self._recipe_folder(rref), self._package_folder(pref)):
+                assert self._art_files("extensions-prod", folder) == self._art_files("extensions-stg", folder)
+
+        self._promote()
+        assert_same_files_in_destination()
+        # Nothing changes promoting it again, nor if it is forced
+        self._promote()
+        assert_same_files_in_destination()
+        self._promote("--force")
+        assert_same_files_in_destination()
+
+        # And it is a valid package for the ones using it
+        run('conan remove "*" -c')
+        run("conan install --requires=mypkg/1.0 -r=extensions-prod")
+        run('conan cache check-integrity "mypkg/1.0:*#*"')
 
 
 @pytest.mark.requires_credentials
